@@ -660,7 +660,7 @@ software responsibilities; the ACIA provides only byte-level
 asynchronous serialisation and the status bits above.
 
 
-___________________________________________________________________
+____________________________________________________________________
 |                                                                  |
 |  _____ _   _ _____             _   _ _____ _     ___ ___  ____   |
 | |_   _| | | | ____|           | | | | ____| |   |_ _/ _ \/ ___|  |
