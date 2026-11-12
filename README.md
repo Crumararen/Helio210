@@ -3,7 +3,7 @@ A ~1:1 logical emulator for my homebrew fantasy computer, the Helio210. Based on
 # Specsheet
 
 ## Helio 210 Memory Map & System Specifications
-
+```
 0000 0000 0000 0000 0000 - Start of System ROM
 0000 0010 0000 0000 0000 - Start of Stack  RAM
 0000 0010 1000 0000 0000 - Start of Random Number
@@ -45,7 +45,8 @@ A ~1:1 logical emulator for my homebrew fantasy computer, the Helio210. Based on
 0x136E0 -> 0x156DF : Font Buffer
 0x156E0 -> 0x1D6DF : PMEM 1
 0x1D6E0 -> 0x256DF : PMEM 2
-0x256E0 -> 0x356DF : EXTPMEM haha
+0x256E0 -> 0x356DF : EXTPMEM
+
 
 Stack RAM is word-addressed, and can
 only be written to or read from
@@ -642,7 +643,7 @@ Register Mapping on the Helio 210:
 All framing, flow control, and higher-level protocol are
 software responsibilities; the ACIA provides only byte-level
 asynchronous serialisation and the status bits above.
-```
+
 ___________________________________________________________________
 |                                                                  |
 |  _____ _   _ _____             _   _ _____ _     ___ ___  ____   |
