@@ -1,0 +1,36 @@
+START
+	LOADI base of character buffer 1 into register 0
+	LOADI default palette into register 9	; I reccomend palette 3, the blue text is pretty.
+	LOADI 1 into register 10		; we'll use this as our general increment register.
+	LOADI base of RAM into register 11	; this will be our input buffer. 
+	LOADI 0 into register 12		; this will be used to count how many addresses into the buffer we are.
+	MOV the value of cursor into reg 14	; this will be used as a reference for our prompt's current position.
+	LOADI old_kemap into register 6		; In the original, this was defined as 20 addresses into general RAM.
+	LOADI 0 into register 7			; We'll use this in a moment to wipe and initialize the keymap.
+	LOADI 16 into register 8		; Length, in bytes, of our keyboard bitmap.
+
+CLEAR_PREVIOUS
+	STORE value of R7 at address in R6	; Zeroes the byte address described in register 6.
+	ADD value of R10 to register R6		; This just increments R6 by 1.
+	SUB value of R10 from register R8	; Increments the count down by 1.
+	JNZ R8 CLEAR PREVIOUS			; Loop if register 8 ain't at 0 yet.
+	LOAD 62 into register 1			; 62 is the ascii code for a greater-than sign, which we use as our prompt.
+	WCHR in R1 to addr in R0 w/ pal in R9	; Write it to the screen.
+	ADD R0 R10				; Increment the cursor by 1.
+	WCHR in R7 to addr in R0 w/ pal in R9   ; This is just a cheap way to get a blank character on screen.
+						; R7 will always be 0 at this point, so we can use it in order to save an instr.
+						; This would be very bad if we were putting it in RAM, but it's purely visual.
+	ADD R0 R10				; Anyways, increment the cursor by 1 and move on.
+
+POLL_LOOP
+	LOADI base of keymap into register 1	; On the old hardware, this was at 0x01804.
+	LOADU base of old_keymap into R6	; On the old hardware, this was at 0x01820.
+	LOADI 16 into register 8		; Reinitialize the 16 step counter.
+
+CHECK_BYTES:
+	LOAD R2 R1				; Read the hardware keymap byte into register 2.
+	LOAD R3 R6				; And the state of the old keymap into register 3.
+	MOV value of R2 into R5			; 
+
+
+...okay, to be honest, this ended up being so close to the final assembly that I decided it was easier to just write the assembly.

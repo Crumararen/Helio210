@@ -1,0 +1,336 @@
+------------------------------------------------------
+
+          Helio 2410 Processor Specifications
+
+------------------------------------------------------
+
+CPU Architecture for the Helio 2410:
+  Sixteen 32-bit internal scratch registers
+  One dedicated 12-bit register for SP
+  One dedicated 24-bit register for PC
+  24-bit memory address bus
+  16-bit data bus
+  10MHz clock speed
+
+Instruction set...
+  All instructions whose first byte starts with 0x1 through 0x5
+  are two-word opcodes. All others are one-word opcodes.
+  PC is a 24-bit byte address. PC is incremented by 4 for
+  two-word instructions, and is otherwise incremented by 2.
+  PC points at the first byte of the current instruction.
+
+  Most memory is byte-addressable. A 16-bit access at byte
+  address N reads bytes N and N+1 and assembles them into
+  one 16-bit word; N may be odd or even. Instruction fetch
+  is a 16-bit access at PC, so PC may be odd or even. The
+  CPU does not mask, fault, or otherwise constrain PC bit 0.
+  A 16-bit access at an odd address may occupy additional
+  bus cycles depending on how memory is implemented; this
+  affects timing only, not instruction encoding or
+  architectural state.
+
+  Byte order within a 16-bit word: at byte address N,
+  byte N holds the high 8 bits and byte N+1 holds the 
+  low 8 bits. This rule applies to instruction words, 
+  LOADI immediates, and SRAM cells alike.
+
+  The stack and character buffers must be 16-bit-word
+  addressable, and can only be reached or written to
+  using the dedicated instructions PUSH, POP, CALL, RET,
+  WCHR and RCHR; these regions are protected, and any
+  READ or WRITE to them through any other instruction 
+  is considered an *ILLEGAL REGION ACCESS.
+
+  Technically, every address from the CPU's perspective
+  is a cell-address, but in all practical terms this
+  resolves to every region being either word-addressed
+  (16-bit-wide cells) or byte-addressed (8-bit-wide-cells).
+
+  * Strangely, due to the design of this CPU, a stack 
+    overflow or stack underflow is recoverable; ILLEGAL 
+    REGION ACCESS, on the other hand, raises a bus error, 
+    and forces a total reset of the CPU. standard RAM is 
+    not cleared on a CPU reset barring total power loss, 
+    but all registers besides the SP are zeroed and the 
+    cpu reenters memory at address 0x000000. SP value is
+    preserved across this reset because stack RAM is not
+    cleared, and so reinitializing the SP value would
+    orphan live stack data.
+
+Main codes:
+  0x0 SUBCODE                 (Prefix for subcode operations)
+  0x1 LOADI   Ra, imm24       (Load 24-bit immediate into Ra)
+  0x2 JMP     addr24          (Jump to addr24)
+  0x3 JZ      Ra, addr24      (Jump to addr24 if Ra == 0)
+  0x4 JNZ     Ra, addr24      (Jump to addr24 if Ra != 0)
+  0x5 CALL    addr24          (Push PC, then jump to addr24)
+  0x6 RET                     (Pop PC from stack)
+  0x7 SHL     Ra, shamt       (Shift Left;  shamt = imm6 or register)
+  0x8 SHR     Ra, shamt       (Shift Right; shamt = imm6 or register)
+  0x9 JLT     Ra, Rb, Rc      (Jump to address in Rc if Ra < Rb)
+  0xA JGT     Ra, Rb, Rc      (Jump to address in Rc if Ra > Rb)
+  0xB RND     Ra, imm8        (Random Number)
+  0xC PUSH    Ra              (Push Ra onto stack)
+  0xD POP     Ra              (Pop from stack into Ra)
+  0xE WCHR    Ra, Rb, Rc      (Write character Rc to address Ra using palette Rb)
+  0xF RCHR    Ra, Rb, Rc      (Read character at Ra into palette Rb and char Rc)
+Sub codes:
+  0x0 NOP                     (No Operation)
+  0x1 HALT                    (Halt the CPU)
+  0x2 LOAD    Ra, Rb          (Load memory at address Rb into Ra)
+  0x3 STORE   Ra, Rb          (Store Rb into memory at address Ra)
+  0x4 ADD     Ra, Rb          (Add       Rb to   Ra)
+  0x5 MUL     Ra, Rb          (Multiply  Ra by   Rb)
+  0x6 SUB     Ra, Rb          (Subtract  Rb from Ra)
+  0x7 DIV     Ra, Rb          (Divide    Ra by   Rb)
+  0x8 MOD     Ra, Rb          (Modulo/Remainder)
+  0x9 AND     Ra, Rb          (Bitwise AND)
+  0xA OR      Ra, Rb          (Bitwise OR)
+  0xB XOR     Ra, Rb          (Bitwise XOR)
+  0xC NOT     Ra              (Bitwise Invert)
+  0xD MOV     Ra, Rb          (Copy value from one register to another)
+  0xE MOVPC   Ra              (Move PC into register)
+  0xF JMPR    Ra              (Jump to address in Ra)
+  0xF CALLR   Ra              (Push PC, jump to address in Ra)
+
+Subcodes are encoded as the low nibble
+of the first byte; the remaining 8 bits
+of the instruction word are interpreted
+as the subcode's operands. Main codes
+use the low nibble of the first byte as
+well as the remaining 8 bits of the word
+as their operands.
+
+JMPR and CALLR share the sub-opcode 0xF.
+To differentiate between them, the CPU
+reads the low nibble of the second byte. 
+The assembler reads JMPR & CALLR and 
+translates, inserting the value for
+proper operation into this field.
+
+PUSH splits register value in half, sending 
+low 16 bits first, then high 16 across the 
+data bus. POP reads the high 16 bits first, 
+then the low 16 bits, and reconstructs the
+full register value with an OR gate.
+
+CALL splits the PC address into two words,
+pushing the low 16 bits first, then high 8
+zero-extended to 16 across the data bus.
+
+RET pops the high 8 bits first, then low 16,
+reconstructs as PC = (high8 << 16) | low 16
+
+The stack pointer (SP) is a dedicated
+12-bit register holding a cell index
+into 16-bit-word-addressable RAM with 
+SP ranging over 0x000–0xFFF. Stack offset 
+from 0x00000 as well as stack size are 
+set with a hardware switch at install. 
+On reset, the CPU reads the configured 
+stack size and sets SP as size minus 1. 
+The stack grows downward toward 0x000.
+This behavior is very simple, but it
+unfortunately means that address 0x000
+itself is not usable, and the effective
+stack size is in reality 2047 words.
+
+If SP would leave STACK region on a PUSH 
+or POP, the CPU raises STACK OVERFLOW or 
+STACK UNDERFLOW and leaves SP unchanged, 
+and no memory is written.
+
+LOADI, JMP, JZ, JNZ and CALL encode imm24
+as one word and one byte, high 8 first, 
+then low 16.
+
+Indirect jumps target low 24 bits of
+target register's value.
+
+MUL preserves low 32 bits of result,
+all overflow is silently lost. 
+MOD by 0 results in Ra == 0.
+
+DIV / 0 results in Ra == 0xFFFFFFFF,
+software must check Rb for zero if
+the distinction matters.
+
+MOD / 0 results in Ra == 0x00000000,
+software must check Rb for zero if
+the distinction matters.
+
+Divide by zero sentinels are designed
+to output useful constants rather than
+arithmetic results. DIV / 0 sets all
+bits in target register high, MOD / 0
+sets all bits in target register low.
+
+SHR and SHL interpret the bit 7 of the  
+operand field as a flag. If low, performs   
+a logical shift, interpreting last 6 bits 
+as an immediate. If high, interprets the 
+last 4 bits as a register ID, and uses the 
+value of the target register as the shift 
+count. Any shift count > 31 sets Ra's value 
+to 0. Any bits not used for operation are 
+ignored in both modes of operation.
+
+WCHR & RCHR assume character & palette data
+are each at most 8 bits long, and outputs
+them simultaneously. RCHR zero-extends to
+fill target registers, while WCHR only
+reads the bottom 8 bits of Rb & Rc.
+
+Every arithmetic and comparison instruction
+interprets its operands as unsigned 32-bit
+integers. Signed integer interpretation is
+not native to the ISA, and thus it must be
+implemented in software if needed.
+
+Instruction diagrams...
+  LOADI:
+    0001 RRRR IIII IIII | opcode, register, high 8 of immediate
+    IIII IIII IIII IIII | low 16 of 24-bit immediate
+  JMP:
+    0010 0000 IIII IIII | opcode, unused, high 8 of immediate
+    IIII IIII IIII IIII | low 16 of 24-bit immediate
+  JZ:
+    0011 RRRR IIII IIII | opcode, register, high 8 of immediate
+    IIII IIII IIII IIII | low 16 of 24-bit immediate 
+  JNZ:
+    0100 RRRR IIII IIII | opcode, register, high 8 of immediate
+    IIII IIII IIII IIII | low 16 of 24-bit immediate 
+  CALL:
+    0101 0000 IIII IIII | opcode, unused, high 8 of immediate
+    IIII IIII IIII IIII | low 16 of 24-bit immediate 
+  RET:
+    1101 0000 0000 0000 | opcode
+  SHL:
+    0110 RRRR T0II IIII | opcode, register, shift type (imm if 0, Rb if 1), imm6/regB
+  SHR:
+    0111 RRRR T0II IIII | opcode, register, shift type (imm if 0, Rb if 1), imm6/regB
+  JLT:
+    1000 RRRA RRRB RRRC | opcode, register A, register B, register C
+  JGT:
+    1001 RRRA RRRB RRRC | opcode, register A, register B, register C
+  RND:
+    1010 RRRR 0000 0III | opcode, register, imm3
+  PUSH:
+    1011 RRRR 0000 0000 | opcode, register
+  POP:
+    1100 RRRR 0000 0000 | opcode, register
+  WCHR:
+    1110 RRRA RRRB RRRC | opcode, register A, register B, register C
+  RCHR:
+    1111 RRRA RRRB RRRC | opcode, register A, register B, register C
+  NOP:
+    0000 0000 0000 0000 | opcode, subopcode
+  HALT:
+    0000 0001 0000 0000 | opcode, subopcode
+  LOAD:
+    0000 0010 RRRA RRRB | opcode, subopcode, register A, register B
+  STORE:
+    0000 0011 RRRA RRRB | opcode, subopcode, register A, register B
+  ADD:
+    0000 0100 RRRA RRRB | opcode, subopcode, register A, register B
+  MUL:
+    0000 0101 RRRA RRRB | opcode, subopcode, register A, register B
+  SUB:
+    0000 0110 RRRA RRRB | opcode, subopcode, register A, register B
+  DIV:
+    0000 0111 RRRA RRRB | opcode, subopcode, register A, register B
+  MOD:
+    0000 1000 RRRA RRRB | opcode, subopcode, register A, register B
+  AND:
+    0000 1001 RRRA RRRB | opcode, subopcode, register A, register B
+  OR:
+    0000 1010 RRRA RRRB | opcode, subopcode, register A, register B
+  XOR:
+    0000 1011 RRRA RRRB | opcode, subopcode, register A, register B
+  NOT:
+    0000 1100 RRRA 0000 | opcode, subopcode, register A
+  MOV:
+    0000 1101 RRRA RRRB | opcode, subopcode, register A, register B
+  MOVPC:
+    0000 1110 RRRA 0000 | opcode, subopcode, register A
+  JMPR:
+    0000 1111 RRRR 0000 | opcode, subopcode, register A, flag low
+  CALLR:
+    0000 1111 RRRR 1111 | opcode, subopcode, register A, flag high
+
+CPU lore...
+  The 2410 shipped in two systems sharing 
+  the same motherboard design- the 
+  business- class 210-B (larger memory banks, 
+  monitor, ~3×BOM retail) and the cheaper base 
+  Helio 210 (smaller memory banks, ~2.3×BOM 
+  general retail, ~1.8×BOM direct to school 
+  districts).
+  
+  Both ran basically the same operating
+  system, same ROM BASIC, and the same 
+  assembler, so a student trained on 
+  the education machine could move to 
+  the Helio 210-B without retraining. 
+  
+  Marketing emphasized that the education 
+  machine used "the same CPU as our 
+  business systems" - a claim that was 
+  true in silicon and, more importantly, 
+  true in software.
+
+  The CEO of the Helio Corporation was its
+  primary investor, funding the company 
+  mostly out-of-pocket rather than relying
+  on loans for R&D or bootstrapping. The
+  idea was simple; make the best CPU they
+  possibly could ship to the educational
+  sector in as short a time as possible,
+  market aggressively in the industrial,
+  education, business and home computer
+  sectors, sell at a loss to snap up
+  market share for the first year, and
+  pray to whoever will listen that either
+  the memory market crashes, the peripherals
+  and software can make up for the difference,
+  the business-class machine's margins conver
+  the loss, or some other windfull comes about
+  to save them from their own design. In the
+  end, the CEO's bet paid off when the cost of
+  SRAM, which the entire system uses for both
+  persistent and random access volatile memory,
+  crashed from 1984-1985. The bill of materials
+  dropped from ~$347 per machine for the Helio
+  210 to ~$190 per machine, nearly halving the
+  cost. They dropped the price of the computers
+  themselves after making up some of the money
+  lost in the last year to a clean $495 for the
+  Helio 210 and $695 for the 210-B in 1985.
+
+  In late 1986, they retooled from the 3.5μm
+  process they used for the original Helio 2410
+  to the 1.5μm process they were planning to
+  use for the true successor CPU, and released
+  a faster version of the 2410 using the new
+  process. The new chip, the 2416 is a direct 
+  process port of the 2410: identical micro-
+  architecture, identical RTL, re-laid-out 
+  for the 1.5 μm rules. It ran at a blazing 
+  fast 16MHz while otherwise behaving logically 
+  identical to the original 2410. It shipped in 
+  the new Helio 216 and 216-B, both of which 
+  also had extended memory banks, as well as 
+  the 216-C, which nearly completely filled up 
+  the entire 16 megabyte address space just two 
+  years later, a class of computers that was 
+  made to order, but rarely ordered, due to its 
+  enormous cost of $3395. It was designed mostly 
+  because the CEO wanted one for his own use, 
+  and because, if they're going to design one 
+  anyways, why not sell it to anyone who wants 
+  one? As long as it makes more than it costs, 
+  and earns roughly as much as at least the 216-B, 
+  might as well. A truly overbuilt machine for the 
+  era, but it was quite beloved by the software 
+  division of the company, which was given seven 
+  of the first eight units produced for their use.

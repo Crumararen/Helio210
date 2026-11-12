@@ -1,0 +1,60 @@
+Global State & Setup
+
+   MAX_LABELS = 1024: Limits how many labels can exist in one file. Prevents memory exhaustion during assembly.
+   MAX_FIXUPS = 2048: Limits forward-reference patches. Ensures the assembler does not run out of patch space.
+   ROM_SIZE = 8192: Defines the 8 KiB maximum output size. Mirrors the Helio 210 System ROM capacity.
+   ROM_START = 0x00000: Sets the beginning address of ROM. Used to validate .ORG directives.
+   ROM_END = 0x01FFF: Sets the ending address of ROM. Used to check for overflow errors.
+   STACK_START / STACK_END: Defines the protected stack region. Prevents code from being placed there.
+   RAM_START / RAM_END: Defines the main byte-addressable SRAM. Used for .ORG validation.
+   PMEM_START / PMEM_END: Defines persistent memory boundaries. Validates executable code locations in PMEM.
+   output_buffer: A byte array holding the assembled machine code. Acts as the final binary image.
+   rom_position: Tracks the current byte offset in the output buffer. Advances as instructions are emitted.
+   current_org: Stores the base address defined by .ORG. Used to calculate absolute label addresses.
+   region_end: Stores the upper bound of the current memory region. Prevents writing past the region.
+   addr_scale: Tracks byte vs. word addressing. Ensures label math uses the correct cell size.
+   error_flag: A boolean indicating if any error occurred. Prevents writing output on failure.
+   current_line: Tracks the line number for error reporting. Helps the user find syntax mistakes.
+   labels: A list storing defined label names and addresses. Resolves symbolic references to numbers.
+   fixups: A list of unresolved forward references. Patches addresses once labels are known.
+
+Main Execution Flow
+
+   FUNCTION Main(): The entry point of the assembler. Orchestrates the two-pass process.
+   IF command_line_args_are_invalid:: Checks for input and output filenames. Prevents runtime crashes from missing arguments.
+   file = OPEN_FILE(...): Opens the source code file for reading. Fails gracefully if the file is missing.
+   WHILE NOT file.EndOfFile():: Loops through every line in the source. Begins Pass 1: label and size calculation.
+   line = Strip_Comments(...): Removes text after the semicolon. Prevents comments from interfering with parsing.
+   IF line contains ':':: Detects label definitions at the start of a line. Records them for later use.
+   Add_To_List(labels, ...): Saves the label name and current address. Builds the symbol table.
+   mnemonic = Uppercase(First_Word(line)): Extracts the instruction name. Normalizes case for strict comparison.
+   IF mnemonic == ".ORG":: Checks for origin directives. Sets the base address for the following code.
+   Set_Org_State(address): Updates the current address and region limits. Ensures code stays within valid memory.
+   SWITCH mnemonic:: Matches the instruction to its size. Advances rom_position to prepare for Pass 2.
+   Reset_File_To_Start(file): Rewinds the source file. Starts Pass 2: actual code generation.
+   Clear_Array(output_buffer): Zeroes the output buffer. Ensures no garbage data remains from previous runs.
+   IF line contains ':': CONTINUE: Skips labels in Pass 2. Their addresses are already recorded.
+   line = Replace_Char(line, ',', ' '): Replaces commas with spaces. Simplifies argument splitting.
+   SWITCH mnemonic:: Translates the instruction into machine code. The core of the assembler logic.
+   CASE "LOADI":: Handles 24-bit immediate loads. Emits four bytes (opcode + high + low word).
+   Emit_Word((0x1 << 12) ...): Packs the opcode and high address byte. Follows the big-endian fetch rules.
+   CASE "JMP", "CALL", "JZ", "JNZ":: Handles 24-bit branch instructions. Emits four bytes for the target address.
+   CASE "LOAD", "ADD", "SUB"...:: Handles standard ALU operations. Packs two registers into one word.
+   Emit_Word((0x0 << 12) ...): Constructs the subcode instruction. Uses the main 0x0 prefix.
+   CASE "SHL", "SHR":: Handles shift instructions with complex operands. Differentiates immediate vs. register shifts.
+   IF operand starts with 'R':: Determines if the shift amount is in a register. Sets the type flag bit.
+   CASE "JLT", "JGT":: Handles three-register conditional jumps. Packs all three nibbles into one word.
+   CASE "WCHR", "RCHR":: Handles character buffer access. Packs address, palette, and character registers together.
+   FOR EACH fixup IN fixups:: Resolves forward references. Patches the output buffer with final addresses.
+   IF addr == NOT_FOUND:: Checks if a used label was ever defined. Throws an error if missing.
+   output_buffer[fixup.patch_pos] = ...: Writes the 24-bit address into the buffer. Patches the high, mid, and low bytes.
+
+Helper Functions
+
+   FUNCTION Set_Org_State(addr): Validates .ORG addresses against the memory map. Sets region boundaries.
+   FUNCTION Calculate_Current_Address(): Computes the absolute address for labels. Adds the base origin to the offset.
+   FUNCTION Resolve_Value_Or_Label(arg_string): Converts strings to numbers or addresses. Handles labels and character literals.
+   FUNCTION Emit_Word(val): Writes a 16-bit word to the buffer. Uses big-endian byte order (high byte first).
+   FUNCTION Emit_Byte(val): Writes a single byte to the buffer. Used for .byte directives.
+   FUNCTION Parse_Register(string): Converts R0–R15 into integer indices. Validates register bounds.
+   FUNCTION Map_To_Subcode(mnem): Maps ALU names to their 4-bit subcodes. Replaces long string comparisons.

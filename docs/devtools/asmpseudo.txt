@@ -1,0 +1,362 @@
+// --- HELPER CONSTANTS  ---
+MAX_LABELS = 1024
+MAX_FIXUPS = 2048
+MAX_LINE_LENGTH = 256
+
+// --- SYSTEM MEMORY MAP ---
+REGIONS = [
+    { name: "ROM",      start: 0x00000, end: 0x01FFF, is_protected: FALSE },
+    { name: "STACK",    start: 0x02000, end: 0x027FF, is_protected: TRUE  },
+    { name: "RAM",      start: 0x02840, end: 0x1283F, is_protected: FALSE },
+    { name: "CHRBUF1",  start: 0x12840, end: 0x12F47, is_protected: TRUE  },
+    { name: "PALBUF1",  start: 0x12F48, end: 0x12F87, is_protected: FALSE },
+    { name: "CHRBUF2",  start: 0x12F88, end: 0x1368F, is_protected: TRUE  },
+    { name: "PALBUF2",  start: 0x13690, end: 0x136D7, is_protected: FALSE },
+    { name: "GPUCTRL",  start: 0x136D8, end: 0x136DF, is_protected: FALSE },
+    { name: "FONT",     start: 0x136E0, end: 0x156DF, is_protected: FALSE },
+    { name: "PMEM1",    start: 0x156E0, end: 0x1D6DF, is_protected: FALSE },
+    { name: "PMEM2",    start: 0x1D6E0, end: 0x256DF, is_protected: FALSE },
+    { name: "EXTPMEM",  start: 0x256E0, end: 0x356DF, is_protected: FALSE }
+]
+
+// --- INSTRUCTION LOOKUP TABLE ---
+INSTRUCTIONS[] = {
+    // 24-bit immediate, first operand is a register (byte1 = opcode | reg)
+    { mnemonic:"LOADI", opcode:0x10, ops:2, format:"imm24_reg" },
+    { mnemonic:"JZ",    opcode:0x30, ops:2, format:"imm24_reg" },
+    { mnemonic:"JNZ",   opcode:0x40, ops:2, format:"imm24_reg" },
+
+    // 24-bit immediate, no register (byte1 = opcode, low nibble = 0)
+    { mnemonic:"JMP",   opcode:0x20, ops:1, format:"imm24" },
+    { mnemonic:"CALL",  opcode:0x50, ops:1, format:"imm24" },
+
+    // One-word main opcodes
+    { mnemonic:"RET",   opcode:0x60, ops:0, format:"reg0" },
+    { mnemonic:"SHL",   opcode:0x70, ops:2, format:"shift" },
+    { mnemonic:"SHR",   opcode:0x80, ops:2, format:"shift" },
+    { mnemonic:"JLT",   opcode:0x90, ops:3, format:"reg3" },
+    { mnemonic:"JGT",   opcode:0xA0, ops:3, format:"reg3" },
+    { mnemonic:"RND",   opcode:0xB0, ops:2, format:"imm3" },
+    { mnemonic:"PUSH",  opcode:0xC0, ops:1, format:"reg1" },
+    { mnemonic:"POP",   opcode:0xD0, ops:1, format:"reg1" },
+    { mnemonic:"WCHR",  opcode:0xE0, ops:3, format:"reg3" },
+    { mnemonic:"RCHR",  opcode:0xF0, ops:3, format:"reg3" },
+
+    // Sub-coded (main opcode nibble = 0; opcode field holds the sub-code)
+    { mnemonic:"NOP",   opcode:0x00, ops:0, format:"sub_0reg" },
+    { mnemonic:"HALT",  opcode:0x01, ops:0, format:"sub_0reg" },
+    { mnemonic:"LOAD",  opcode:0x02, ops:2, format:"sub_2reg" },
+    { mnemonic:"STORE", opcode:0x03, ops:2, format:"sub_2reg" },
+    { mnemonic:"ADD",   opcode:0x04, ops:2, format:"sub_2reg" },
+    { mnemonic:"MUL",   opcode:0x05, ops:2, format:"sub_2reg" },
+    { mnemonic:"SUB",   opcode:0x06, ops:2, format:"sub_2reg" },
+    { mnemonic:"DIV",   opcode:0x07, ops:2, format:"sub_2reg" },
+    { mnemonic:"MOD",   opcode:0x08, ops:2, format:"sub_2reg" },
+    { mnemonic:"AND",   opcode:0x09, ops:2, format:"sub_2reg" },
+    { mnemonic:"OR",    opcode:0x0A, ops:2, format:"sub_2reg" },
+    { mnemonic:"XOR",   opcode:0x0B, ops:2, format:"sub_2reg" },
+    { mnemonic:"NOT",   opcode:0x0C, ops:1, format:"sub_1reg" },
+    { mnemonic:"MOV",   opcode:0x0D, ops:2, format:"sub_2reg" },
+    { mnemonic:"MOVPC", opcode:0x0E, ops:1, format:"sub_1reg" },
+    { mnemonic:"JMPR",  opcode:0x0F, ops:1, format:"sub_jmpr", flag:0x0 },
+    { mnemonic:"CALLR", opcode:0x0F, ops:1, format:"sub_jmpr", flag:0xF }}
+
+// --- ASSEMBLER STATE ---
+current_org     = REGIONS[0].start
+current_region  = REGIONS[0]
+region_end      = REGIONS[0].end
+output_offset   = 0                 // next write position in output_buffer
+error_flag      = FALSE
+
+labels[MAX_LABELS]  = []            // { name, addr }
+label_count         = 0
+fixups[MAX_FIXUPS]  = []            // { offset, label, num_bytes, mask }
+fixup_count         = 0
+
+IF run_flag == "-rom"               // Limit output at size of a standard ROM
+     output_buffer[0x02000] = []    //                 8 kilobytes
+                                    //
+ELSE IF run_flag == "-32"           // Limit output at size of a single Persistent Memory bank
+     output_buffer[0x08000] = []    //                32 kilobytes
+                                    //
+ELSE IF run_flag == "-full"         // Limit output at size of work RAM
+     output_buffer[0x10000] = []    //                32 kilobytes
+                                    //
+ELSE output_buffer[0x04000] = []    // Default max of 16 kilobytes
+
+FOR EACH line IN source_file:
+    tokens = Tokenize(line)
+    IF tokens is empty OR tokens[0] is a comment: CONTINUE
+
+    // --- Directives ---
+    IF tokens[0] == ".ORG":
+        Set_Org_State(Parse_Number(tokens[1]))
+        CONTINUE
+    IF tokens[0] == ".BYTE":
+        FOR EACH t IN tokens[1..]:
+            Emit_Byte(Resolve_Value_Or_Label(t, 0xFF, output_offset, 1, 0xFF))
+        CONTINUE
+    IF tokens[0] starts with '.':
+        PrintError("Unknown directive: " + tokens[0])
+        error_flag = TRUE
+        CONTINUE
+
+    // --- Label definition: "name:" ---
+    IF tokens[0] ends with ':':
+        name = Strip(tokens[0], ':')
+        IF Is_Valid_Label_Name(name) == FALSE:
+            PrintError("Invalid label name: " + name)
+            error_flag = TRUE
+            CONTINUE
+        IF Find_Label(name) != NOT_FOUND:
+            PrintError("Duplicate label: " + name)
+            error_flag = TRUE
+            CONTINUE
+        Define_Label(name, Calculate_Current_Address())
+        tokens = tokens[1..]
+        IF tokens is empty: CONTINUE
+
+    // --- Instruction ---
+    mnemonic = tokens[0]
+    ops      = tokens[1..]
+
+    instr = Lookup_By_Mnemonic(mnemonic)
+    IF instr == NOT_FOUND:
+        PrintError("Unknown mnemonic: " + mnemonic)
+        error_flag = TRUE
+        CONTINUE
+
+    IF Count(ops) != instr.ops:
+        PrintError(mnemonic + " expects " + instr.ops + " operand(s), got " + Count(ops))
+        error_flag = TRUE
+        CONTINUE
+
+    Encode_Instruction(instr, ops)
+
+// --- Resolve forward references ---
+Apply_Fixups()
+
+IF error_flag:
+    abort("Assembly failed with errors")
+
+
+FUNCTION Encode_Instruction(instr, ops):
+    SWITCH instr.format:
+
+        // 24-bit immediate, first byte carries a register
+        CASE "imm24_reg":                       // LOADI Rn, #imm  /  JZ Rn, target
+            ra = Parse_Register(ops[0])
+            Emit_Byte(instr.opcode | ra)
+            imm = Resolve_Value_Or_Label(ops[1], 0xFFFFFF, output_offset, 3, 0xFFFFFF)
+            Emit_Byte((imm >> 16) & 0xFF)
+            Emit_Byte((imm >>  8) & 0xFF)
+            Emit_Byte( imm        & 0xFF)
+
+        // 24-bit immediate, no register
+        CASE "imm24":                           // JMP target  /  CALL target
+            ASSERT (instr.opcode & 0x0F) == 0   // low nibble reserved
+            Emit_Byte(instr.opcode)
+            imm = Resolve_Value_Or_Label(ops[0], 0xFFFFFF, output_offset, 3, 0xFFFFFF)
+            Emit_Byte((imm >> 16) & 0xFF)
+            Emit_Byte((imm >>  8) & 0xFF)
+            Emit_Byte( imm        & 0xFF)
+
+        // Three registers
+        CASE "reg3":                            // JLT, JGT, WCHR, RCHR
+            ra = Parse_Register(ops[0])
+            rb = Parse_Register(ops[1])
+            rc = Parse_Register(ops[2])
+            Emit_Byte(instr.opcode | ra)
+            Emit_Byte((rb << 4) | rc)
+
+        // One register
+        CASE "reg1":                            // PUSH, POP
+            ra = Parse_Register(ops[0])
+            Emit_Byte(instr.opcode | ra)
+            Emit_Byte(0x00)
+
+        // No registers
+        CASE "reg0":                            // RET
+            Emit_Byte(instr.opcode)
+            Emit_Byte(0x00)
+
+        // Shift: opcode|R, (T<<7)|(value & 0x3F)
+        CASE "shift":                           // SHL, SHR
+            ra = Parse_Register(ops[0])
+            Emit_Byte(instr.opcode | ra)
+            IF Is_Register(ops[1]):
+                t   = 1
+                val = Parse_Register(ops[1])
+            ELSE:
+                t   = 0
+                val = Resolve_Value_Or_Label(ops[1], 0x3F, output_offset, 1, 0x3F)
+            Emit_Byte((t << 7) | (val & 0x3F))
+
+        // RND: opcode|R, imm3
+        CASE "imm3":                            // RND Rn, #imm3
+            ra = Parse_Register(ops[0])
+            Emit_Byte(instr.opcode | ra)
+            imm = Resolve_Value_Or_Label(ops[1], 0x07, output_offset, 1, 0x07)
+            Emit_Byte(imm & 0x07)
+
+        // Sub-coded
+        CASE "sub_2reg":                        // LOAD, STORE, ADD, ..., MOV
+            ra = Parse_Register(ops[0])
+            rb = Parse_Register(ops[1])
+            Emit_Byte(instr.opcode)             // full byte: (0<<4)|subcode
+            Emit_Byte((ra << 4) | rb)
+
+        CASE "sub_1reg":                        // NOT, MOVPC
+            ra = Parse_Register(ops[0])
+            Emit_Byte(instr.opcode)
+            Emit_Byte(ra << 4)
+
+        CASE "sub_jmpr":                        // JMPR (flag 0x0), CALLR (flag 0xF)
+            ra = Parse_Register(ops[0])
+            Emit_Byte(instr.opcode)
+            Emit_Byte((ra << 4) | instr.flag)
+
+        CASE "sub_0reg":                        // NOP, HALT
+            Emit_Byte(instr.opcode)
+            Emit_Byte(0x00)
+
+        DEFAULT:
+            PrintError("Unhandled instruction format: " + instr.format)
+            error_flag = TRUE
+
+
+FUNCTION Set_Org_State(addr):
+    FOR EACH region IN REGIONS:
+        IF addr >= region.start AND addr <= region.end:
+            IF region.is_protected:
+                PrintError("Cannot assemble into protected region: " + region.name)
+                error_flag = TRUE
+                RETURN
+            current_org    = addr
+            current_region = region
+            region_end     = region.end
+            output_offset  = addr           // assume .ORG resets the output pointer
+            RETURN
+    PrintError(".ORG address not in a valid region: " + addr)
+    error_flag = TRUE
+
+FUNCTION Calculate_Current_Address():
+    // Address of the next byte to be emitted.
+    // Note: assumes .ORG rebases output_offset so current_org + output_offset
+    // is only correct if .ORG resets output_offset. Preserved from original.
+    RETURN output_offset
+
+FUNCTION Resolve_Value_Or_Label(arg_string, max_value, fixup_offset, fixup_bytes, fixup_mask):
+    // 1. Already-defined label
+    label_addr = Find_Label(arg_string)
+    IF label_addr != NOT_FOUND:
+        IF label_addr > max_value:
+            PrintError("Symbol " + arg_string + " (=" + label_addr + ") exceeds field limit " + max_value)
+            error_flag = TRUE
+            RETURN label_addr & max_value
+        RETURN label_addr
+
+    // 2. Char literal
+    IF arg_string starts with "'" AND arg_string ends with "'":
+        ch = Parse_Char_Literal(arg_string)
+        IF ch > max_value:
+            PrintError("Char literal exceeds field limit")
+            error_flag = TRUE
+            RETURN ch & max_value
+        RETURN ch
+
+    // 3. Numeric literal
+    IF Is_Numeric_Literal(arg_string):
+        value = Parse_Number(arg_string)
+        IF value > max_value:
+            PrintError("Value " + value + " exceeds limit " + max_value)
+            error_flag = TRUE
+            value = value & max_value
+        RETURN value
+
+    // 4. Forward reference — queue a fixup (patch output_buffer later)
+    IF fixup_bytes == 0:
+        PrintError("Undefined symbol: " + arg_string)
+        error_flag = TRUE
+        RETURN 0
+    IF fixup_count >= MAX_FIXUPS:
+        PrintError("Too many fixups (max " + MAX_FIXUPS + ")")
+        error_flag = TRUE
+        RETURN 0
+    fixups[fixup_count] = { offset: fixup_offset, label: arg_string,
+                            num_bytes: fixup_bytes, mask: fixup_mask }
+    fixup_count += 1
+    RETURN 0
+
+FUNCTION Emit_Byte(val):
+    addr = Calculate_Current_Address()
+    IF addr > region_end:
+        PrintError("Output exceeds end of region " + current_region.name)
+        error_flag = TRUE
+        RETURN
+    IF output_offset >= OUTPUT_SIZE:
+        PrintError("Output buffer overflow")
+        error_flag = TRUE
+        RETURN
+    output_buffer[output_offset] = val & 0xFF
+    output_offset += 1
+
+FUNCTION Parse_Register(string):
+    IF Length(string) < 2 OR (string[0] != 'R' AND string[0] != 'r'):
+        PrintError("Invalid register: " + string)
+        error_flag = TRUE
+        RETURN 0
+    num = Parse_Number(string[1:])
+    IF num < 0 OR num > 15:
+        PrintError("Invalid register (must be R0-R15): " + string)
+        error_flag = TRUE
+        RETURN 0
+    RETURN num
+
+FUNCTION Find_Label(name):
+    FOR i = 0 TO label_count - 1:
+        IF labels[i].name == name: RETURN labels[i].addr
+    RETURN NOT_FOUND
+
+FUNCTION Define_Label(name, addr):
+    IF label_count >= MAX_LABELS:
+        PrintError("Too many labels (max " + MAX_LABELS + ")")
+        error_flag = TRUE
+        RETURN
+    labels[label_count] = { name: name, addr: addr }
+    label_count += 1
+
+FUNCTION Apply_Fixups():
+    FOR i = 0 TO fixup_count - 1:
+        f = fixups[i]
+        addr_val = Find_Label(f.label)
+        IF addr_val == NOT_FOUND:
+            PrintError("Undefined symbol: " + f.label)
+            error_flag = TRUE
+            CONTINUE
+        IF addr_val > f.mask:
+            PrintError("Symbol " + f.label + " (=" + addr_val + ") exceeds field limit " + f.mask)
+            error_flag = TRUE
+            CONTINUE
+        FOR b = 0 TO f.num_bytes - 1:
+            shift = (f.num_bytes - 1 - b) * 8
+            output_buffer[f.offset + b] |= (addr_val >> shift) & 0xFF
+
+// ASSUMED EXTERNAL HELPERS
+
+FUNCTION Is_Numeric_Literal(s):
+    IF Length(s) == 0: RETURN FALSE
+    IF Length(s) >= 3 AND s[0] == "'" AND s[Length(s)-1] == "'": RETURN TRUE
+    IF Length(s) > 2 AND (s[0..1] == "0x" OR s[0..1] == "0X"): RETURN Is_All_Hex(s[2:])
+    IF Length(s) > 2 AND (s[0..1] == "0b" OR s[0..1] == "0B"): RETURN Is_All_Bin(s[2:])
+    RETURN Is_All_Digits(s)
+
+FUNCTION Is_Register(s):
+    IF Length(s) < 2: RETURN FALSE
+    IF s[0] != 'R' AND s[0] != 'r': RETURN FALSE
+    n = Parse_Number(s[1:])
+    RETURN n >= 0 AND n <= 15
+
+// Assumed external (already in your codebase):
+//   Tokenize, PrintError, Parse_Number, Parse_Char_Literal,
+//   Is_Valid_Label_Name, Lookup_By_Mnemonic, Count, ASSERT
