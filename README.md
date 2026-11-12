@@ -1,9 +1,13 @@
 # Helio210
 A ~1:1 logical emulator for my homebrew fantasy computer, the Helio210. Based on the proprietary Helio 2410 CPU and the Flare 2 GPU, with integrated emulators for the General Instrument AY-3-8910 Programmable Sound Generator and dual R6551 ACIA UART Controllers. A basic operating system and some demo programs are included. 
 # Specsheet
-
-## Helio 210 Memory Map & System Specifications
 ```
+------------------------------------------------------
+
+     Helio 210 Memory Map & System Specifications
+
+------------------------------------------------------
+
 0000 0000 0000 0000 0000 - Start of System ROM
 0000 0010 0000 0000 0000 - Start of Stack  RAM
 0000 0010 1000 0000 0000 - Start of Random Number
@@ -45,8 +49,7 @@ A ~1:1 logical emulator for my homebrew fantasy computer, the Helio210. Based on
 0x136E0 -> 0x156DF : Font Buffer
 0x156E0 -> 0x1D6DF : PMEM 1
 0x1D6E0 -> 0x256DF : PMEM 2
-0x256E0 -> 0x356DF : EXTPMEM
-
+0x256E0 -> 0x356DF : EXTPMEM haha
 
 Stack RAM is word-addressed, and can
 only be written to or read from
@@ -58,8 +61,11 @@ with WCHR and RCHR.
 
 All other RAM is byte-addressed.
 
+------------------------------------------------------
 
-## Helio 2410 Processor Specifications
+          Helio 2410 Processor Specifications
+
+------------------------------------------------------
 
 CPU Architecture for the Helio 2410:
   Sixteen 32-bit internal scratch registers
@@ -244,8 +250,11 @@ integers. Signed integer interpretation is
 not native to the ISA, and thus it must be
 implemented in software if needed.
 
+------------------------------------------------------
 
-## Helio FLARE Graphical Processor Specifications
+    Helio FLARE Graphical Processor Specifications
+
+------------------------------------------------------
 
 The Helio 210 uses the proprietary Helio Flare 2
 graphical processing unit to handle all its graphical
@@ -286,7 +295,7 @@ monitor. The encoder's PAL/NTSC mode is selected by
 the same hardware region switch that configures the 
 Flare 2's scanout timing.
 
-Graphics control memory map:```
+Graphics control memory map:
   ----------------------------------------------------------------
   Addr      Name         R/W  Description
   ----------------------------------------------------------------
@@ -322,7 +331,7 @@ Graphics control memory map:```
                               XORs successive reads to detect a  |
                               new frame.                         )
                               bit 3 = region ( 0 = PAL, 1 = NTSC )
-                              bits 4–7 read 0.```
+                              bits 4–7 read 0.
 
 Character cells:
   Each character-buffer address holds one 16-bit cell.
@@ -426,8 +435,11 @@ Scanout timing:
   STATUS bit 2 (frame) toggles at
   the start of each vblank.
 
+------------------------------------------------------
 
-## General Instrument AY-3-8910 PSG Specifications
+    General Instrument AY-3-8910 PSG Specifications
+
+------------------------------------------------------
 
 The Helio 210 uses the General Instrument AY-3-8910
 Programmable Sound Generator (PSG) to generate audio.
@@ -503,8 +515,11 @@ Register Map (16 registers, selected via address latch):
   R13         Envelope shape
   R14/R15     I/O Port A / Port B data
 
+------------------------------------------------------
 
-## Rockwell R6551 ACIA Specifications
+          Rockwell R6551 ACIA Specifications
+
+------------------------------------------------------
 
 The Helio 210 uses two Rockwell R6551 Asynchronous
 Communications Interface Adapters (ACIA) for serial I/O.
@@ -643,6 +658,7 @@ Register Mapping on the Helio 210:
 All framing, flow control, and higher-level protocol are
 software responsibilities; the ACIA provides only byte-level
 asynchronous serialisation and the status bits above.
+
 
 ___________________________________________________________________
 |                                                                  |
