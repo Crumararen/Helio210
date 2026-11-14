@@ -12,7 +12,7 @@ At this current stage, in all honesty, my project is almost certainly, in so man
 
 I would very much appreciate constructive criticism and general feedback or advice from anyone interested enough to give it. But for now, I leave you with the project as written, and a small demo:
 
-![](https://youtu.be/6_E5BfaQsO0)
+![Video Preview](https://youtu.be/6_E5BfaQsO0)
 
 ## Specsheet
 ```
