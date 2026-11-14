@@ -10,7 +10,9 @@ My current intentions are, after this version of the computer is finished, to ta
 
 At this current stage, in all honesty, my project is almost certainly, in so many different ways, ignorant, naive, idealized, or overly restricted in artificial ways that don't make actual sense for the era that inspired its development. I am well aware of this fact, but not of the exact details of where, how, or why. 
 
-I would very much appreciate constructive criticism and general feedback or advice from anyone interested enough to give it. But for now, I leave you with the project as written.
+I would very much appreciate constructive criticism and general feedback or advice from anyone interested enough to give it. But for now, I leave you with the project as written, and a small demo:
+
+![](https://youtu.be/6_E5BfaQsO0)
 
 ## Specsheet
 ```
