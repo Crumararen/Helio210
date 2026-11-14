@@ -1,0 +1,103 @@
+So! While I was looking into the implementation of my computer today, I realized a slight problem. 
+While the current memory setup works in software, I think that I have abstracted a bit too far, because, as it turns out,
+my CPU currently doesn't actually have any way to use its fancy 16-bit data bus outside of STACK RAM and the Character buffers.
+If I make the RAM chips x8, then I can't actually grab an instruction from them in a single clock cycle. But if I make them
+word-addressed, then all my byte data doubles in length and leaves a lot of extra space. Neither one of these solutions is very good...
+I think that, in order to make sure that my CPU actually, you know, *works*, I need to fix this. So, this is the solution I came up with:
+
+	Chip 1	Chip 2	Chip 1	Chip 2	Chip 1	Chip 2	etc...
+	Byte 0	Byte 1	Byte 2	Byte 3	Byte 4	Byte 5	^.....
+
+Each of my memory 8-bit memory regions will use two separate byte-addressable x8 memory chips. Chip 1 will hold every even bit, 2 every odd.
+The memory controller, which is an external chip, manages these for each region of memory it controls, and does the math to find which addresses
+go where. It passes the byte from chip 1 as high, and the byte from chip 2 as low. Then we add a pin to both this chip and the CPU that acts as
+a bitflag/switch to tell the memory controller "If this is high, pass only the high byte to the CPU/Write only the high byte at this address."
+
+This creates a new problem, though: What happens when we try to fetch two bytes starting at an odd memory address? Right now, we simply cannot,
+if we abide by the convention laid out above. Thus, we also need for the memory controller to, if the very lowest bit of the address the CPU
+passes is low, pass chip 2's byte as high, then add +1 to the address it calls for in chip 1, and pass that as low. It looks like this:
+
+		Chip 1  Chip 2  Chip 1  Chip 2  Chip 1  Chip 2  etc...
+		Byte 0  Byte 1  Byte 2  Byte 3  Byte 4  Byte 5  ^.....
+On_even		HIGH	LOW
+On_odd			HIGH	LOW
+addr_offset	+0	+0	+1
+
+Lastly, in the CPU itself, we need to add a third operand to LOAD and STORE that specify whether to read/write a single byte from the address,
+or a full 16-bit-word. If set to 1 byte, then, on LOAD, we take the value that the memory controller hands us and shifts it right by 8, and on
+STORE, we instead shift the output left by 8 before we send it to the memory controller. This ensures that we maintain the big-endian standard
+set by our system's standards, without having to add excess undue complexity to the memory controller, I believe. From the registers' perspective,
+nothing really particularly changes; they recieve or send their lowest 16 bits to the instruction either way and the high 16 bits are ignored.
+Lastly, for our PUSH, POP, CALL, RET, WCHAR and RCHAR instructions, we need to use one more pin as a bit flag; in order to write to those regions,
+the CPU must specify that it is a 16-bit-word that it is sending, and this new bit flag, PROTECTMEM, must be set to high. If that is the case,
+and *only* if that is the case, the memory controller will read/write to one of the x16 chips on the motherboard. If any of those conditions are
+not met, then the memory controller very cheekily sets the output of the line that leads to the CPU_RESET pin to HIGH for 3 clock cycles, and
+refuses to write. Naturally, as such, our PUSH, POP, CALL, RET, WCHAR and RCHAR must raise PROTECTMEM and WORD flags as HIGH when they run.
+
+Oh, and now that I think about it, we probably need to turn one write enable pin into two write enable pins for each of these interwoven
+byte-addressed memory chips, so that we can raise whether or not to write to each chip separately. And... Hm. I guess we need the memory
+controller to do a separate read/write pin for each individual chip that it connects to... Oh, this is getting to be a pin-hungry device.
+I think that, for the first generation version of this memory controller, I will give it a 16 bit address bus to talk to the chips directly,
+and one pin for each chip for ENABLE_READ and ENABLE_WRITE. This means no individual memory chip can have more than 64K of address space,
+whatever the width of those addresses. We need to save some pins where we can find them. That means that this memory controller will need...
+
+16 data in
+16 data out
+24 address in
+16 address out
+...62 pins just for addressing and data, before we even touch the r/w pins! Shit! That's too many. How can we get that down? Mm...
+
+How many RAM chips would this computer need?
+
+0x00000 -> 0x01FFF : System ROM
+0x02000 -> 0x027FF : Stack  RAM
+0x02800 -> 0x02803 : Random Number
+0x02804 -> 0x02813 : Keymap
+0x02814 -> 0x02817 : System Clock
+0x02818 -> 0x02819 : System Control
+0x0281A -> 0x02829 : System Audio
+0x0282A -> 0x02831 : System Status
+0x02832 -> 0x02839 : Serial Port
+0x0283A -> 0x0283F : UART Control
+0x02840 -> 0x1283F : Primary SRAM
+0x12840 -> 0x12F47 : Character Buffer 1
+0x12F48 -> 0x12F87 : Palette Buffer 1
+0x12F88 -> 0x1368F : Character Buffer 2
+0x13690 -> 0x136D7 : Palette Buffer 2
+0x136D8 -> 0x136DF : Graphics Control
+0x136E0 -> 0x156DF : Font Buffer
+0x156E0 -> 0x1D6DF : PMEM 1
+0x1D6E0 -> 0x256DF : PMEM 2
+0x256E0 -> 0x356DF : EXTPMEM
+
+Mm.... 
+
+The character buffers would probably historically be on separate chips, but in a modern implementation, that's probably overkill. We should
+put the STACK on a separate chip from them, though, even if it's the same cell width, because we don't want the GPU to be allowed to see it.
+Probably... One 2Kx16 memory chip for the stack, and either one or two chips for the GPU's character buffers. Let's say at least two x16 chips.
+Then, we need... Two volatile RAM chips probably, one for the CPU's workram and one for the GPU's font and palette buffers. This also means that,
+at boot, the operating system will have to load a default font into the GPU's font buffer in order to have text output, unless we maybe have a default
+FONT on a separate ROM that the GPU reads from if the main font buffer is empty? Might be simpler. Then either one or two non-volatile static ram chips
+of some variety or another. Perhaps ferromagnetic ram? Or- wasn't there some kind of ram that's based on the same flash technology in an SD card? SDRAM?
+I dunno. I should probably do more research on this... And I don't know if ROM needs to be managed by the memory controller or not- wait, no, almost
+certainly it would. It does not make sense to fragment our architecture further at this point. Hmmm.....
+
+Maybe we should have one parent chip coordinating two child chips? mm. That technology doesn't work. You cannot control children. Man and dog chips?
+Master and servant? Lord and peasant? Uh... Let's call them the master dispatcher and the minor dispatchers. They'd have to work together to control
+the memory bus as a whole. Oh, but doing that fragments our design, and will make memory fetches take longer... It really should be on a single chip,
+if at all possible. 
+
+I'll look into what's available on the market and come back to this, I suppose. I will need to use an FPGA with a minimum of 86 user-managed pins, 
+if possible. I probably need very few macrocells to encode this logic, though? I dunno. I should model it in C before I commit to anything.
+
+	 6	write
+	 8	read
+	16	data_in
+	16	data_out
+	24	addr_in
+	16	addr_out
+	86	total_pins
+
+Ah, shit, that doesn't include dispatching for the registers of the serial controllers, gpu, or psg. 
+I need to look at the specs of those again in order to figure out how to get reads/writes dispatched to those.
+For now, I need to get back to packing my shit. I have to be out of this apartment by tomorrow. I'll come back to this later.
