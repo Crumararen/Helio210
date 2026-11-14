@@ -1,0 +1,106 @@
+Filetypes handled natively by operating system:
+	.TXT	Filesys handling: Load contents into RAM starting at address 0x02860 with first 20 bytes reserved for header/flags and text buffer starting at 0x02880
+	.ASM			  ASM files are treated by the filesystem essentially the same as TXT files, and are edited with the same program
+	.EXE	Filesys handling: Read header for program length, load into RAM at address 0x2840, and JMP to 0x02840 to start executing
+	.BIN	Filesys handling: Grab a pointer to its address and record file length in bytes, store at address specified in operand. 
+		                  A subroutine also exists to grab a specific byte from a .BIN file based on its pointer I would imagine. 
+		                  That subroutine can be called at a static address that I will specify once it's, you know, implemented.
+	.LNK	Filesys handling: Jump from current directory index to new directory index, replacing dirID in register. 
+		                  BACK does not return to host of symlink, but rather, the parent of the current folder.
+
+Filesystem header:
+	 8 bits act as a version label for the filesystem standard
+	24 bits specify bytesize of filesystem in memory; theoretical maximum filesystem size of 16 megabytes as such
+	24 bits act as a pointer to the first known safe address in the filesystem for saving/writing files
+	24 bits act as a pointer to the last known safe address in the filesystem for saving/writing files
+		This actually also acts as the first known safe address at which to write new folder headers. See below!!
+	
+Folder header: 
+	12 byte folder names
+	12 byte label for parent folder, if extant
+	 1 byte label for folder width (max number of files) - this value, multiplied by 3, is equal to the bytewidth of the folder body.
+Folder body:
+	3 byte pointer to memory address of every child/file in directory
+	filenames must be fetched from file header
+
+Folders are packed to the RIGHTMOST EDGE of the filesystem and read in reverse, using a decrementing counter. See below!!
+
+File headers:
+	filenames are always 16 bytes wide in file header (16 characters)
+	fileheaders are always assumed to be 20 bytes wide in total
+	2 bytes of file header specify bytelength of file, meaning no single file can be more than 64 kilobytes long
+	2 bytes of file header are currently reserved
+
+Shell commands:
+	FORMAT	addr24, bytelength	; Create a filesystem starting at addr24 of (bytelength) bytes.
+
+	DEFRAG	addr24			; Defragment a filesystem... See below, it's too complicated to sum up here.
+
+	FILE	f1, f2			; Enter filesystem navigation, set path as root/f1/f2, root/f1, or root.
+
+	GET	filename, f1, f2	; Enter filesystem, search for file in root/f1/f2/ or root/f1/ or root/, and print memory address and filelength into registers 4 and 5.
+
+Filesystem subcommands:
+	Run	filename		; Search for (filename) in current folder/subfolder and, if found, load name, memory address and filelength into registers 3, 4 and 5 and call file handler.
+
+	Make	filename, length	; Create a blank file in current folder with name (filename) of byte length (length), filling contents with zeroes.
+
+	Mkdir	foldname		; Create a folder or subfolder in current directory path.
+
+	Open	foldname		; Open a folder/subfolder or handle a symlink (.LNK) file.
+
+	Rmdir	foldname		; Deletes a folder in the current directory and zeroes its header. Refuses to run on populated folders.
+
+	Rmfil	filename		; Deletes a file in the current directory and zeroes its body and header. A file name of * calls a subroutine that finds a list of all files in current directory and deletes them recursively. If text is printed after * that is not
+					; a space or a null character, reads the end of every filename for a match with the text after *, and only adds those to the list of to-delete files.
+
+	Crop	filename, length	; Crop length of file body. If run without arguments, this command attempts to find EOF by counting back from the end of the file until the first non-zero value, then increments forwards by 8 bytes, and sets that address as the new eof.
+					; If run with the length argument, though, it crops the bytelength to whatever the user specified, trusting the user to know what they are doing, why, and whether or not it is safe.	
+
+	Dirsz	foldname, length	; Change the width of a folder header to accept a new maximum number of file pointers. If this makes a folder header wider than it used to be, it checks if it is the most recently defined folder header (at the left of the list)
+					; and if so, simply changes the width label and updates the last known safe address pointer in filesystem header; otherwise, uses the LOAD command's subroutine to move it to the end of the list of folder headers, before zeroing
+					; the old header body. If the new length is equal to or less than the old length, the width label can be safely updated without having to alter anything else. If the new dirsize is smaller than its old dirsize, we should first
+					; make sure that all the files that currently are in the folder would fit into the new folder header and, if not, refuse to perform the operation.
+
+	Hexed	filename		; Convert contents of a file to hexadecimal load them into text buffer starting at 0x2880, fill 0x2860-0x2874 with header, fill 0x2875-0x2d87B with flag HEXDUMP so program knows it is acting as a hex editor, then launch texteditor.
+					; When texteditor closes, it checks 0x2875-0x287F for flags anyways, so at that step, if the flag HEXDUMP is found in that space, it knows to use PARSE_HEX recursively and convert the current text buffer back to a binary file body
+					; before calling the SAVEFILE subroutine.
+
+
+On the topic of fragmentation...
+	So: While designing this, I realized a slight problem with my current model. 
+	Our memory map is contiguous. Because files can be any bytelength at any arbitrary memory address, the only way to know where a free space in the filesystem is by walking the header for every file and the folder headers to find their memory addresses
+	and calculate the gaps between them to find free blocks of arbitrary size that are free, then find the first one that is large enough for the file you want to save, and write it there. This... Sounds horrible. I don't know the specifics of how it would
+	work, but quite frankly, I think just the save file/write file subroutine would probably have to be as large or larger as my assembler, which just simply will not do- and that's before we consider how slow it would be to run, how many cpu cycles it would
+	chew up. Worse, the fragmentation of the filesystem as files written to absolute addresses are deleted or cropped create large regions of memory map effectively unusable without this exact, terrible fragmentation. No, I don't think that will do.
+
+	In order to solve this, I am adding the DEFRAG shell command to the standard and adding a 24-bit pointer to the folder header that marks 1 cell right of the last file in the filesystem. The idea is simple... 
+
+	The 24 bit pointer points to the first known safe address in the memory map that nothing should ever exist after. This makes the subroutine for saving files trivially easy; first, if we are editing a preextant file, we check whether the new bytelength is equal to 
+	or less than its old bytelength, and if so, we just zero its old file body and write the new version in the same space it used to occupy without having to change its memory address; if it doesn't fit, we treat it as a new file, empty the area it used to occupy, and
+	write it into the filesystem starting at the first known good address pointed to by the filesystem header, update the pointer to its memory address in the folder header, and update the first known good pointer in the filesystem header.
+
+	This creates a new problem, though- or rather, it makes the old problem of fragmentation even worse; massive chunks of the filesystem, overtime, become unusable, due to this fragmentation, even though they have nothing in them, and the memory is still good.
+	Thus, I'll implement a DEFRAG shell command in the operating system's implementation that uses the LOAD subroutine in the operating system to pack files leftwards. The idea is basically as follows:
+
+		Walk through the filesystem header, and all the folder headers, fetching the names, memory addresses, and reported bytesizes of every file in the filesystem, and produce a list in work RAM.
+			Walk through that list, and sort it numerically by memory address into a new list, before overwriting the old list to empty the region the new one temporary occupied using the LOAD shell command's subroutine.
+				Next, make one more pass through the list, calculating the end address of each file from its starting memory address plus its reported bytelength, 
+				take that number, subtract it from the starting address of the next file to find the size of the now-available region between it and the next reported file, 
+				and set the next reported file's new starting address as equal to its old starting address minus the difference, before repeating for the next reported file in a loop 
+				until we have the new target addresses for all these files. It is EXTREMELY IMPORTANT that we do not throw away the old starting addresses at this step!!!
+					Finally, going from left to right, loop through the list, using the LOAD command's subroutine in order to move each file from its old address to its new address
+					two bytes at a time, before, at the very last file in the list of files, writing zeroes recursively from the end of the new file +1 through the end of the old file
+					to clear the tail, and setting the new value of the first safe address pointer in the filesystem header as equal to the new end of the last file +1.
+					In order to make sure that we don't ruin anything in the next step, we also update the old folder headers with the new memory addresses of their children now.
+						Next, we basically can repeat all of this to pack folder headers to the right end of the file. At the end, set the last safe address pointer as equal
+						to the end of the last folder header minus one. The algorithms will have to be changed though for this, since the byte order of folders is reversed,
+						but the logic is basically the same for the most part.
+
+	Which reminds me. I also need to add a pointer to the *last* safe address in the filesystem pointing to the end of the last folder header minus one to know where the folder headers start.
+	I packed all the folder headers to the rightmost edge of the filesystem because, unlike general files, I want to ensure they're ABSOLUTELY CERTAINLY in an easy-to-read, contiguous block
+	somewhere, which would be impossible if I packed them to the left edge unless I set an arbitrary limit on how many folders a single filesystem could have and padded out the difference.
+	Because they are read in reversed order with a decrementing cursor from the top of the filesystem, each individual byte remains big-endian to agree with the system convention, but they
+	are packed backwards in the filesystem, similar to how the STACK works.
+
+	Hmm.... Due to the way this is designed, I think I am going to name this filesystem FCGFS24-1 (Flat memory-map Contiguous File System for 24-bit addressing, version 1).
